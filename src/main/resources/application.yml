@@ -1,0 +1,123 @@
+spring:
+  application:
+    name: funds
+
+  # Master data / auxiliary tables (fund catalogue).
+  r2dbc:
+    url: ${DB_URL:r2dbc:postgresql://localhost:5432/funds}
+    username: ${DB_USERNAME:funds}
+    password: ${DB_PASSWORD:funds}
+    pool:
+      enabled: true
+      initial-size: 5
+      max-size: 20
+      max-idle-time: 30m
+
+  data:
+    # Transactional / critical data. `directConnection=true` targets the single-node
+    # replica set exposed by docker-compose without relying on topology discovery.
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/funds?directConnection=true}
+      auto-index-creation: false
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+    consumer:
+      group-id: ${KAFKA_GROUP_ID:funds}
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+# Application-specific settings.
+app:
+  client:
+    # Business rule: every client starts with COP $500.000.
+    initial-balance: 500000
+  currency: COP
+  idempotency:
+    # How long a completed idempotency record stays replayable.
+    retention: 24h
+    # A reservation older than this is considered abandoned by a crashed instance.
+    lease: 30s
+  kafka:
+    topics:
+      subscription-notifications: ${KAFKA_TOPIC_NOTIFICATIONS:funds.subscription.notifications}
+  outbox:
+    relay:
+      # Fixed delay between outbox polling cycles.
+      interval: 2s
+      batch-size: 100
+  security:
+    jwt:
+      # HS256 signing key. MUST be overridden in every non-local environment.
+      # Minimum 256 bits (32 characters) or Nimbus rejects it.
+      secret: ${JWT_SECRET:local-development-only-secret-key-change-me-32b}
+      issuer: ${JWT_ISSUER:yam-funds}
+      ttl: 1h
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+  api-docs:
+    path: /v3/api-docs
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        permitted-number-of-calls-in-half-open-state: 5
+        register-health-indicator: true
+  retry:
+    configs:
+      default:
+        max-attempts: 3
+        wait-duration: 200ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+    instances:
+      # Retries writes that lost the optimistic-locking race on the client document.
+      clientBalanceUpdate:
+        base-config: default
+        max-attempts: 4
+        wait-duration: 50ms
+        retry-exceptions:
+          - org.springframework.dao.OptimisticLockingFailureException
+  ratelimiter:
+    configs:
+      default:
+        limit-for-period: 100
+        limit-refresh-period: 1s
+        timeout-duration: 0
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  health:
+    circuitbreakers:
+      enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.yam.funds: ${LOG_LEVEL:DEBUG}
