@@ -2,6 +2,7 @@ spring:
   application:
     name: funds
 
+  # Master data / auxiliary tables (fund catalogue).
   r2dbc:
     url: ${DB_URL:r2dbc:postgresql://localhost:5432/funds}
     username: ${DB_USERNAME:funds}
@@ -11,6 +12,13 @@ spring:
       initial-size: 5
       max-size: 20
       max-idle-time: 30m
+
+  data:
+    # Transactional / critical data. `directConnection=true` targets the single-node
+    # replica set exposed by docker-compose without relying on topology discovery.
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/funds?directConnection=true}
+      auto-index-creation: false
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
@@ -31,11 +39,39 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
 
-aws:
-  region: ${AWS_REGION:us-east-1}
-  dynamodb:
-    # Override with a local endpoint (e.g. http://localhost:8000) when running against DynamoDB Local.
-    endpoint: ${DYNAMODB_ENDPOINT:}
+# Application-specific settings.
+app:
+  client:
+    # Business rule: every client starts with COP $500.000.
+    initial-balance: 500000
+  currency: COP
+  idempotency:
+    # How long a completed idempotency record stays replayable.
+    retention: 24h
+    # A reservation older than this is considered abandoned by a crashed instance.
+    lease: 30s
+  kafka:
+    topics:
+      subscription-notifications: ${KAFKA_TOPIC_NOTIFICATIONS:funds.subscription.notifications}
+  outbox:
+    relay:
+      # Fixed delay between outbox polling cycles.
+      interval: 2s
+      batch-size: 100
+  security:
+    jwt:
+      # HS256 signing key. MUST be overridden in every non-local environment.
+      # Minimum 256 bits (32 characters) or Nimbus rejects it.
+      secret: ${JWT_SECRET:local-development-only-secret-key-change-me-32b}
+      issuer: ${JWT_ISSUER:yam-funds}
+      ttl: 1h
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
+  api-docs:
+    path: /v3/api-docs
 
 resilience4j:
   circuitbreaker:
@@ -54,6 +90,14 @@ resilience4j:
         wait-duration: 200ms
         enable-exponential-backoff: true
         exponential-backoff-multiplier: 2
+    instances:
+      # Retries writes that lost the optimistic-locking race on the client document.
+      clientBalanceUpdate:
+        base-config: default
+        max-attempts: 4
+        wait-duration: 50ms
+        retry-exceptions:
+          - org.springframework.dao.OptimisticLockingFailureException
   ratelimiter:
     configs:
       default:
