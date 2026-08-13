@@ -46,7 +46,9 @@ class RegisterClientServiceTest {
         final FundsProperties properties = new FundsProperties(
                 new FundsProperties.Client(new BigDecimal("500000")),
                 "COP",
-                new FundsProperties.Idempotency(Duration.ofHours(24), Duration.ofSeconds(30)));
+                new FundsProperties.Idempotency(Duration.ofHours(24), Duration.ofSeconds(30)),
+                new FundsProperties.Security(new FundsProperties.Security.Jwt(
+                        "test-secret-key-at-least-32-characters!!", "yam-funds", Duration.ofHours(1))));
         service = new RegisterClientService(clientRepository, identifiers, properties);
 
         when(identifiers.nextClientId()).thenReturn(ClientId.of("client-1"));
