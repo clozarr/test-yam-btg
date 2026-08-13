@@ -1,4 +1,4 @@
-package com.yam.funds.infrastructure.in.web;
+package com.yam.funds.infrastructure.in.web.controller;
 
 import com.yam.funds.domain.exception.AlreadySubscribedException;
 import com.yam.funds.domain.exception.ClientNotFoundException;
@@ -16,6 +16,7 @@ import com.yam.funds.domain.port.in.CancelFundSubscriptionUseCase;
 import com.yam.funds.domain.port.in.SubscribeToFundUseCase;
 import com.yam.funds.domain.port.in.command.SubscribeToFundCommand;
 import com.yam.funds.domain.port.in.result.TransactionReceipt;
+import com.yam.funds.infrastructure.in.web.GlobalExceptionHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

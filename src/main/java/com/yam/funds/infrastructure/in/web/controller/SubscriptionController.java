@@ -1,4 +1,4 @@
-package com.yam.funds.infrastructure.in.web;
+package com.yam.funds.infrastructure.in.web.controller;
 
 import com.yam.funds.domain.model.ClientId;
 import com.yam.funds.domain.model.FundId;

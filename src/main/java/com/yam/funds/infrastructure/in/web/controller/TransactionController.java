@@ -1,9 +1,10 @@
-package com.yam.funds.infrastructure.in.web;
+package com.yam.funds.infrastructure.in.web.controller;
 
 import com.yam.funds.domain.model.ClientId;
 import com.yam.funds.domain.model.TransactionCursor;
 import com.yam.funds.domain.port.in.GetTransactionHistoryUseCase;
 import com.yam.funds.domain.port.in.query.TransactionHistoryQuery;
+import com.yam.funds.infrastructure.in.web.TransactionCursorCodec;
 import com.yam.funds.infrastructure.in.web.dto.TransactionPageResponse;
 import com.yam.funds.infrastructure.in.web.dto.TransactionResponse;
 import io.swagger.v3.oas.annotations.Operation;

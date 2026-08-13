@@ -1,4 +1,4 @@
-package com.yam.funds.infrastructure.in.web;
+package com.yam.funds.infrastructure.in.web.controller;
 
 import com.yam.funds.domain.port.in.ListFundsUseCase;
 import com.yam.funds.infrastructure.in.web.dto.FundResponse;
