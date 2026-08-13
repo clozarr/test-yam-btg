@@ -1,0 +1,38 @@
+package com.yam.funds.application.usecase;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+
+/**
+ * Builds the digest that decides whether a retry carries the same request as the
+ * original attempt.
+ */
+final class RequestFingerprints {
+
+    private static final String ALGORITHM = "SHA-256";
+
+    /**
+     * Separator between the parts being digested. NUL is used because it cannot occur
+     * in an identifier or a decimal amount, so ("ab", "c") and ("a", "bc") cannot digest
+     * to the same value. Written as an octal escape rather than a literal byte, which
+     * would make this source file binary.
+     */
+    private static final String SEPARATOR = "\0";
+
+    private RequestFingerprints() {
+    }
+
+    /** Digests the given parts into a stable fingerprint. */
+    static String of(final String... parts) {
+        final String canonical = String.join(SEPARATOR, parts);
+        try {
+            final MessageDigest digest = MessageDigest.getInstance(ALGORITHM);
+            return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));
+        } catch (final NoSuchAlgorithmException e) {
+            // SHA-256 is mandated by the Java platform; its absence is not recoverable.
+            throw new IllegalStateException("%s is not available".formatted(ALGORITHM), e);
+        }
+    }
+}
