@@ -1,0 +1,14 @@
+# Redpanda Console configuration.
+#
+# Mounted into the container rather than passed as environment variables: the
+# variable names have shifted between Console major versions, while this file
+# format is stable and states plainly what it connects to.
+
+kafka:
+  # The internal listener. Console runs inside the compose network, so it must
+  # not use localhost:9092 — that address is advertised for clients on the host.
+  brokers:
+    - kafka:19092
+
+server:
+  listenPort: 8080

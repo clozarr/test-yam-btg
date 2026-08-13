@@ -81,6 +81,10 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       CLUSTER_ID: yam-funds-local-cluster
+      # Must be set, and must match where the volume is mounted. Left unset, the
+      # image writes to /tmp inside the container: the broker works, the volume
+      # sits empty, and every recreate silently discards the whole log.
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
     volumes:
       - kafka-data:/var/lib/kafka/data
     healthcheck:
@@ -89,6 +93,30 @@ services:
       timeout: 10s
       retries: 20
       start_period: 20s
+
+  # Web UI for inspecting topics, messages and consumer groups.
+  #
+  # Behind the "tools" profile, so `docker compose up -d` does not start it:
+  #
+  #     docker compose --profile tools up -d console      # http://localhost:8081
+  #
+  # It is a reader. Browsing a topic here uses a throwaway consumer group and
+  # does not commit offsets for the application's own group, so it cannot steal
+  # notifications from the running service.
+  console:
+    image: redpandadata/console:v3.9.0
+    container_name: yam-kafka-console
+    profiles: ["tools"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      # 8081 on the host: the application already owns 8080.
+      - "8081:8080"
+    environment:
+      CONFIG_FILEPATH: /etc/console/config.yaml
+    volumes:
+      - ./docker/kafka-console.yaml:/etc/console/config.yaml:ro
 
 volumes:
   mongodb-data:
