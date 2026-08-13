@@ -1,6 +1,7 @@
 package com.yam.funds.application.usecase;
 
 import com.yam.funds.config.FundsProperties;
+import com.yam.funds.config.FundsPropertiesFixture;
 import com.yam.funds.domain.exception.ClientAlreadyExistsException;
 import com.yam.funds.domain.model.Client;
 import com.yam.funds.domain.model.ClientId;
@@ -43,12 +44,7 @@ class RegisterClientServiceTest {
 
     @BeforeEach
     void setUp() {
-        final FundsProperties properties = new FundsProperties(
-                new FundsProperties.Client(new BigDecimal("500000")),
-                "COP",
-                new FundsProperties.Idempotency(Duration.ofHours(24), Duration.ofSeconds(30)),
-                new FundsProperties.Security(new FundsProperties.Security.Jwt(
-                        "test-secret-key-at-least-32-characters!!", "yam-funds", Duration.ofHours(1))));
+        final FundsProperties properties = FundsPropertiesFixture.defaults();
         service = new RegisterClientService(clientRepository, identifiers, properties);
 
         when(identifiers.nextClientId()).thenReturn(ClientId.of("client-1"));

@@ -20,22 +20,6 @@ spring:
       uri: ${MONGODB_URI:mongodb://localhost:27017/funds?directConnection=true}
       auto-index-creation: false
 
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
-      acks: all
-      properties:
-        enable.idempotence: true
-        max.in.flight.requests.per.connection: 5
-    consumer:
-      group-id: ${KAFKA_GROUP_ID:funds}
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      auto-offset-reset: earliest
-      enable-auto-commit: false
-
 server:
   port: ${SERVER_PORT:8080}
 
@@ -50,7 +34,12 @@ app:
     retention: 24h
     # A reservation older than this is considered abandoned by a crashed instance.
     lease: 30s
+  # Kafka is wired through reactor-kafka directly rather than Spring Kafka's Boot
+  # auto-configuration, so the connection settings live here instead of under
+  # spring.kafka. Serializers, acks and idempotence are set explicitly in KafkaConfig.
   kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer-group-id: ${KAFKA_GROUP_ID:funds}
     topics:
       subscription-notifications: ${KAFKA_TOPIC_NOTIFICATIONS:funds.subscription.notifications}
   outbox:

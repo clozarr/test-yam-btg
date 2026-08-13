@@ -12,10 +12,17 @@ import java.time.Duration;
  * @param currency    ISO code every monetary amount is denominated in
  * @param idempotency lifetimes governing idempotency records
  * @param security    authentication settings
+ * @param kafka       topic names
+ * @param outbox      settings for the relay that forwards recorded events
  */
 @ConfigurationProperties(prefix = "app")
 public record FundsProperties(
-        Client client, String currency, Idempotency idempotency, Security security) {
+        Client client,
+        String currency,
+        Idempotency idempotency,
+        Security security,
+        Kafka kafka,
+        Outbox outbox) {
 
     /**
      * @param initialBalance opening balance every client is registered with
@@ -42,6 +49,34 @@ public record FundsProperties(
          * @param ttl    how long a minted token stays valid
          */
         public record Jwt(String secret, String issuer, Duration ttl) {
+        }
+    }
+
+    /**
+     * @param bootstrapServers broker addresses
+     * @param consumerGroupId  group the notification consumer joins
+     * @param topics           destinations events are published to
+     */
+    public record Kafka(String bootstrapServers, String consumerGroupId, Topics topics) {
+
+        /**
+         * @param subscriptionNotifications carries the notice a client receives after
+         *                                  subscribing to a fund
+         */
+        public record Topics(String subscriptionNotifications) {
+        }
+    }
+
+    /**
+     * @param relay how the outbox relay paces itself
+     */
+    public record Outbox(Relay relay) {
+
+        /**
+         * @param interval  delay between polling cycles
+         * @param batchSize maximum events forwarded per cycle
+         */
+        public record Relay(Duration interval, int batchSize) {
         }
     }
 }

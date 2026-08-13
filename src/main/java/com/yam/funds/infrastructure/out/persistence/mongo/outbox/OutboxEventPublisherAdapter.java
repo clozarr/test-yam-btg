@@ -1,7 +1,5 @@
 package com.yam.funds.infrastructure.out.persistence.mongo.outbox;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yam.funds.domain.model.event.SubscriptionOpenedEvent;
 import com.yam.funds.domain.port.out.EventPublisherPort;
 import com.yam.funds.infrastructure.out.persistence.mongo.document.OutboxEventDocument;
@@ -10,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Clock;
 
@@ -42,7 +41,7 @@ public class OutboxEventPublisherAdapter implements EventPublisherPort {
                 .then();
     }
 
-    private OutboxEventDocument toDocument(final SubscriptionOpenedEvent event) throws JsonProcessingException {
+    private OutboxEventDocument toDocument(final SubscriptionOpenedEvent event) {
         return OutboxEventDocument.builder()
                 .id(event.eventId())
                 .aggregateType(AGGREGATE_TYPE)

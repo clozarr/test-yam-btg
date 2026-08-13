@@ -29,6 +29,10 @@ public class OutboxEventDocument {
     public static final String COLLECTION = "outbox_events";
 
     public static final String STATUS_PENDING = "PENDING";
+
+    /** Claimed by a relay instance; released back to PENDING if the send fails. */
+    public static final String STATUS_PUBLISHING = "PUBLISHING";
+
     public static final String STATUS_PUBLISHED = "PUBLISHED";
 
     @Id
