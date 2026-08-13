@@ -35,6 +35,23 @@ public interface IdempotencyPort {
     Mono<Void> complete(IdempotencyRecord record);
 
     /**
+     * Drops a reservation whose operation failed before committing anything.
+     *
+     * <p>The reservation is inserted before the transaction starts, so it survives the
+     * rollback that a rejected business rule triggers. Without this compensating delete,
+     * a caller whose request was refused — for insufficient balance, say — would be
+     * locked out of their own idempotency key until its lease expired, unable to correct
+     * the request and retry.
+     *
+     * <p>Implementations must only remove the caller's own reservation: another instance
+     * may have reclaimed the key in the meantime.
+     *
+     * @param reservation the reservation this caller holds
+     * @return completion; a reservation that is no longer ours is left untouched
+     */
+    Mono<Void> release(IdempotencyRecord reservation);
+
+    /**
      * Takes over a reservation whose lease expired, presumably left behind by a crashed
      * instance.
      *

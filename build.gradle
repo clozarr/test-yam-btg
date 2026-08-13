@@ -16,8 +16,15 @@ java {
 
 ext {
     resilience4jVersion = '2.3.0'
-    reactorKafkaVersion = '1.3.23'
+    reactorKafkaVersion = '1.3.25'
     testcontainersVersion = '1.21.3'
+
+    // Pinned down from the version Spring Boot manages (4.x). reactor-kafka - including
+    // its latest release - is still compiled against the 3.9 client and calls a
+    // ConsumerRecord constructor that Kafka 4 removed, so consuming a record throws
+    // NoSuchMethodError at runtime. A 3.9 client talks to a 4.x broker fine; 3.9 is the
+    // bridge release Kafka documents for upgrading to 4.0.
+    ext['kafka.version'] = '3.9.1'
     // 3.x is the Spring Boot 4 line; 2.x targets Boot 3 and is not compatible.
     springdocVersion = '3.1.0'
 }
@@ -74,8 +81,10 @@ dependencies {
     implementation "org.springdoc:springdoc-openapi-starter-webflux-ui:${springdocVersion}"
 
     // --- Messaging: reactive Kafka ---
+    // spring-kafka is deliberately absent: its 4.x line dropped the reactive templates,
+    // nothing in this codebase imports it, and it was the only thing forcing the Kafka 4
+    // client onto the classpath.
     implementation 'io.projectreactor.kafka:reactor-kafka:' + reactorKafkaVersion
-    implementation 'org.springframework.kafka:spring-kafka'
 
     // --- Resilience ---
     implementation "io.github.resilience4j:resilience4j-spring-boot3:${resilience4jVersion}"
@@ -101,7 +110,6 @@ dependencies {
     // MongoDBContainer bootstraps a single-node replica set, which the multi-document
     // transactions used by the subscription flow require.
     integrationTestImplementation 'org.testcontainers:mongodb'
-    integrationTestImplementation 'org.springframework.kafka:spring-kafka-test'
 }
 
 tasks.named('test') {

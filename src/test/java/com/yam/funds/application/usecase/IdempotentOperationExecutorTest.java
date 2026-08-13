@@ -1,6 +1,7 @@
 package com.yam.funds.application.usecase;
 
 import com.yam.funds.config.FundsProperties;
+import com.yam.funds.config.FundsPropertiesFixture;
 import com.yam.funds.domain.exception.IdempotencyConflictException;
 import com.yam.funds.domain.exception.InsufficientBalanceException;
 import com.yam.funds.domain.exception.OperationInProgressException;
@@ -61,12 +62,7 @@ class IdempotentOperationExecutorTest {
 
     @BeforeEach
     void setUp() {
-        final FundsProperties properties = new FundsProperties(
-                new FundsProperties.Client(new BigDecimal("500000")),
-                "COP",
-                new FundsProperties.Idempotency(RETENTION, LEASE),
-                new FundsProperties.Security(new FundsProperties.Security.Jwt(
-                        "test-secret-key-at-least-32-characters!!", "yam-funds", Duration.ofHours(1))));
+        final FundsProperties properties = FundsPropertiesFixture.withIdempotency(RETENTION, LEASE);
         executor = new IdempotentOperationExecutor(
                 idempotencyPort,
                 transactionRepository,
@@ -232,14 +228,45 @@ class IdempotentOperationExecutorTest {
     void propagatesBusinessFailure() {
         when(idempotencyPort.reserve(any()))
                 .thenReturn(Mono.just(new IdempotencyReservation.Acquired(existingRecord("fingerprint-a"))));
+        when(idempotencyPort.release(any())).thenReturn(Mono.empty());
         passThroughTransaction();
 
         StepVerifier.create(run(() -> Mono.error(new InsufficientBalanceException("FDO-ACCIONES"))))
                 .expectError(InsufficientBalanceException.class)
                 .verify();
 
-        // The reservation is never completed, and the surrounding transaction rolls it
-        // back entirely, so the caller may retry with the same key.
         verify(idempotencyPort, never()).complete(any());
+    }
+
+    @Test
+    @DisplayName("frees the key when the operation is refused, so the caller can correct and retry")
+    void releasesReservationOnBusinessFailure() {
+        when(idempotencyPort.reserve(any()))
+                .thenReturn(Mono.just(new IdempotencyReservation.Acquired(existingRecord("fingerprint-a"))));
+        when(idempotencyPort.release(any())).thenReturn(Mono.empty());
+        passThroughTransaction();
+
+        StepVerifier.create(run(() -> Mono.error(new InsufficientBalanceException("FDO-ACCIONES"))))
+                .expectError(InsufficientBalanceException.class)
+                .verify();
+
+        // The reservation is inserted before the transaction opens, so the rollback does
+        // not remove it; without this compensating delete the caller would be locked out
+        // of their own key until the lease expired.
+        verify(idempotencyPort).release(any());
+    }
+
+    @Test
+    @DisplayName("reports the original failure even if releasing the reservation fails")
+    void keepsOriginalErrorWhenReleaseFails() {
+        when(idempotencyPort.reserve(any()))
+                .thenReturn(Mono.just(new IdempotencyReservation.Acquired(existingRecord("fingerprint-a"))));
+        when(idempotencyPort.release(any()))
+                .thenReturn(Mono.error(new IllegalStateException("storage unavailable")));
+        passThroughTransaction();
+
+        StepVerifier.create(run(() -> Mono.error(new InsufficientBalanceException("FDO-ACCIONES"))))
+                .expectError(InsufficientBalanceException.class)
+                .verify();
     }
 }

@@ -19,7 +19,10 @@ services:
     container_name: yam-mongodb
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     ports:
-      - "27017:27017"
+      # Published on 27018 so a natively installed mongod can keep 27017. The container
+      # still listens on 27017 internally, which is also the host the replica set
+      # advertises — see the note on directConnection in application.yml.
+      - "27018:27017"
     volumes:
       - mongodb-data:/data/db
     healthcheck:
@@ -45,7 +48,10 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # PostgreSQL 18 expects the mount one level up, at /var/lib/postgresql, and places
+      # the cluster in a version-specific subdirectory. Mounting the old
+      # /var/lib/postgresql/data path makes the image refuse to start.
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U funds -d funds"]
       interval: 5s
