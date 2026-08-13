@@ -58,6 +58,23 @@ public class MongoIdempotencyAdapter implements IdempotencyPort {
     }
 
     /**
+     * Removes the reservation, but only while it is still ours: the match requires the
+     * record to be in progress and to carry our own creation timestamp, so a reservation
+     * another instance reclaimed after our lease expired is left alone.
+     */
+    @Override
+    public Mono<Void> release(final IdempotencyRecord reservation) {
+        final Query query = Query.query(Criteria.where("_id").is(reservation.key())
+                .and(FIELD_STATUS).is(IdempotencyStatus.IN_PROGRESS.name())
+                .and(FIELD_CREATED_AT).is(reservation.createdAt()));
+
+        return mongoTemplate.remove(query, IdempotencyDocument.class)
+                .doOnNext(result -> log.debug("[release] freed {} reservation(s) for key {}",
+                        result.getDeletedCount(), reservation.key()))
+                .then();
+    }
+
+    /**
      * Takes over a reservation left behind by a crashed instance.
      *
      * <p>The conditional update is the whole point: it only matches while the record is

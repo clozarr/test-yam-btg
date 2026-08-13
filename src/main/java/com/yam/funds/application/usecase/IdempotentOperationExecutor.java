@@ -83,7 +83,25 @@ public class IdempotentOperationExecutor {
                                 .flatMap(transaction -> idempotencyPort
                                         .complete(reservation.complete(transaction.id().value(), now))
                                         .thenReturn(transaction)))
-                .map(TransactionReceipt::executed);
+                .map(TransactionReceipt::executed)
+                // The reservation was inserted before the transaction opened, so the
+                // rollback does not undo it. Releasing it here is what lets a caller whose
+                // request was refused fix it and retry with the same key, instead of being
+                // locked out until the lease expires.
+                .onErrorResume(failure -> releaseQuietly(reservation).then(Mono.error(failure)));
+    }
+
+    /**
+     * A failure to release must not replace the error the caller actually needs to see;
+     * the lease expiry is the backstop if this does not land.
+     */
+    private Mono<Void> releaseQuietly(final IdempotencyRecord reservation) {
+        return idempotencyPort.release(reservation)
+                .onErrorResume(releaseFailure -> {
+                    log.warn("[runExactlyOnce] could not release reservation {}. Details: {}",
+                            reservation.key(), releaseFailure.getMessage());
+                    return Mono.empty();
+                });
     }
 
     /**

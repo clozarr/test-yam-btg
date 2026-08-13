@@ -13,11 +13,23 @@ spring:
       max-size: 20
       max-idle-time: 30m
 
+  # Transactional / critical data, on 27018 so a natively installed mongod can keep the
+  # default port.
+  #
+  # The connection URI belongs under `spring.mongodb`, NOT `spring.data.mongodb`: Spring
+  # Boot 4 split them, leaving only Spring Data settings under the latter. Putting it in
+  # the wrong place is silently ignored and the driver falls back to localhost:27017 —
+  # which, on a machine running a second MongoDB, means connecting to the wrong database
+  # rather than failing.
+  #
+  # `directConnection=true` is required, not cosmetic: the containerised replica set
+  # advertises its member as localhost:27017, so a driver doing topology discovery would
+  # connect here and then redirect itself to 27017. Direct connection pins it.
+  mongodb:
+    uri: ${MONGODB_URI:mongodb://localhost:27018/funds?directConnection=true}
+
   data:
-    # Transactional / critical data. `directConnection=true` targets the single-node
-    # replica set exposed by docker-compose without relying on topology discovery.
     mongodb:
-      uri: ${MONGODB_URI:mongodb://localhost:27017/funds?directConnection=true}
       auto-index-creation: false
 
 server:
