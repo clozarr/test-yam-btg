@@ -92,12 +92,15 @@ resilience4j:
         exponential-backoff-multiplier: 2
     instances:
       # Retries writes that lost the optimistic-locking race on the client document.
+      # Must name the domain exception, not Spring's: the persistence adapter translates
+      # OptimisticLockingFailureException at the boundary, so by the time the retry sees
+      # the failure it is already a ConcurrentAggregateUpdateException.
       clientBalanceUpdate:
         base-config: default
         max-attempts: 4
         wait-duration: 50ms
         retry-exceptions:
-          - org.springframework.dao.OptimisticLockingFailureException
+          - com.yam.funds.domain.exception.ConcurrentAggregateUpdateException
   ratelimiter:
     configs:
       default:
