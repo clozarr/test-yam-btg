@@ -68,10 +68,10 @@ public class IdempotentOperationExecutor {
 
         return idempotencyPort.reserve(candidate)
                 .flatMap(reservation -> switch (reservation) {
-                    case IdempotencyReservation.Acquired acquired ->
-                            execute(acquired.record(), work, now);
-                    case IdempotencyReservation.AlreadyHeld held ->
-                            resolveDuplicate(held.existing(), candidate, work, now);
+                    case IdempotencyReservation.Acquired(IdempotencyRecord reserved) ->
+                            execute(reserved, work, now);
+                    case IdempotencyReservation.AlreadyHeld(IdempotencyRecord existing) ->
+                            resolveDuplicate(existing, candidate, work, now);
                 });
     }
 
