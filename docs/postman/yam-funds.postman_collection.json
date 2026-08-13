@@ -1,0 +1,936 @@
+{
+  "info": {
+    "name": "YAM Funds API",
+    "description": "Exercises every scenario in the technical challenge against a running instance.\n\n## Before running\n\n1. `docker compose up -d` and wait for all three services to report healthy.\n2. `./gradlew bootRun --args='--spring.profiles.active=local'`\n\nThe `local` profile is required: it is what exposes `POST /dev/token`, which stands in for the identity provider. Without it there is no way to obtain a bearer token and every request answers 401.\n\n## How to run\n\nUse the Collection Runner and run the folders **in order**. Requests share state through collection variables — the client registered in `0. Setup` is the one every later request acts on, and the balance assertions depend on the preceding steps having run.\n\nEach request asserts its own outcome, so a green run means the API behaved as the challenge specifies.\n\n## Notification (challenge feature 4)\n\nDelivery is asynchronous: the subscription records an event in the outbox, a relay forwards it to Kafka, and a consumer dispatches it over the client's preferred channel. It therefore has no HTTP response to assert on. Confirm it in the application log a second or two after subscribing:\n\n```\n[handle] [END OK] partition=0 offset=...\n[send] [EMAIL] to=a***@example.com subject='Subscription confirmed' ...\n```\n\nRegister a client with `\"notificationPreference\": \"SMS\"` to see the `[SMS]` adapter used instead.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "adminToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "clientToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "clientId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "subscribeKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refusedKey",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "transactionId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "nextCursor",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "idemKey",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// A fresh idempotency key for every request. Steps that deliberately reuse one",
+          "// set it explicitly instead.",
+          "pm.collectionVariables.set('idemKey', 'pm-' + Date.now() + '-' + Math.floor(Math.random() * 1000000));"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Setup",
+      "description": "Obtains an admin token, registers the client the rest of the collection acts on, and obtains that client's own token.",
+      "item": [
+        {
+          "name": "Mint admin token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/dev/token?clientId=admin&roles=ADMIN",
+              "host": ["{{baseUrl}}"],
+              "path": ["dev", "token"],
+              "query": [
+                { "key": "clientId", "value": "admin" },
+                { "key": "roles", "value": "ADMIN" }
+              ]
+            },
+            "description": "Local profile only. Client registration is admin-only because a client cannot present a token for an account that does not exist yet."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('returns a bearer token', () => {",
+                  "    pm.expect(body.accessToken).to.be.a('string').and.not.empty;",
+                  "    pm.expect(body.tokenType).to.eql('Bearer');",
+                  "});",
+                  "pm.collectionVariables.set('adminToken', body.accessToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register client",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Ada Lovelace\",\n  \"email\": \"ada+{{$timestamp}}@example.com\",\n  \"phone\": \"+573001112233\",\n  \"notificationPreference\": \"EMAIL\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients"]
+            },
+            "description": "Business rule: every client starts with COP $500,000. The opening balance comes from configuration and is never taken from the request — letting a caller choose it would be a way to mint money."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('opening balance is COP 500,000', () => {",
+                  "    pm.expect(Number(body.balance.amount)).to.eql(500000);",
+                  "    pm.expect(body.balance.currency).to.eql('COP');",
+                  "});",
+                  "pm.test('starts with no subscriptions', () => pm.expect(body.activeSubscriptions).to.be.an('array').that.is.empty);",
+                  "pm.collectionVariables.set('clientId', body.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mint client token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/dev/token?clientId={{clientId}}&roles=CLIENT",
+              "host": ["{{baseUrl}}"],
+              "path": ["dev", "token"],
+              "query": [
+                { "key": "clientId", "value": "{{clientId}}" },
+                { "key": "roles", "value": "CLIENT" }
+              ]
+            },
+            "description": "The token subject is what the API compares against the clientId in the path."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('subject is the registered client', () => pm.expect(body.clientId).to.eql(pm.collectionVariables.get('clientId')));",
+                  "pm.collectionVariables.set('clientToken', body.accessToken);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Fund catalogue",
+      "item": [
+        {
+          "name": "List funds",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/funds",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "funds"]
+            },
+            "description": "Public: the catalogue is product information, not client data. No token required."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const funds = pm.response.json();",
+                  "pm.test('returns the five funds from the specification', () => pm.expect(funds).to.have.lengthOf(5));",
+                  "",
+                  "const expected = {",
+                  "    '1': { name: 'FPV_AM_PACTUAL_RECAUDADORA', min: 75000,  category: 'FPV' },",
+                  "    '2': { name: 'FPV_AM_PACTUAL_ECOPETROL',   min: 125000, category: 'FPV' },",
+                  "    '3': { name: 'DEUDAPRIVADA',               min: 50000,  category: 'FIC' },",
+                  "    '4': { name: 'FDO-ACCIONES',               min: 250000, category: 'FIC' },",
+                  "    '5': { name: 'FPV_AM_PACTUAL_DINAMICA',    min: 100000, category: 'FPV' }",
+                  "};",
+                  "",
+                  "pm.test('each fund matches its specified minimum and category', () => {",
+                  "    funds.forEach(fund => {",
+                  "        const want = expected[fund.id];",
+                  "        pm.expect(want, 'unexpected fund id ' + fund.id).to.not.be.undefined;",
+                  "        pm.expect(fund.name).to.eql(want.name);",
+                  "        pm.expect(Number(fund.minimumAmount.amount)).to.eql(want.min);",
+                  "        pm.expect(fund.category).to.eql(want.category);",
+                  "    });",
+                  "});"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Subscribe to a fund",
+      "description": "Challenge feature 1. Also covers the idempotency guarantees required of an operation that moves money.",
+      "item": [
+        {
+          "name": "Subscribe — happy path",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{subscribeKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 75000.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "1"]
+            },
+            "description": "Links the client to FPV_AM_PACTUAL_RECAUDADORA for its minimum of COP 75,000. The balance debit, the subscription, the ledger entry and the notification event commit as one unit.\n\nUses a named key so the next request can repeat this exact call."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('subscribeKey', 'pm-sub-' + Date.now() + '-' + Math.floor(Math.random() * 1000000));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('records an OPENING entry', () => pm.expect(body.transaction.type).to.eql('OPENING'));",
+                  "pm.test('every transaction carries a unique identifier', () => pm.expect(body.transaction.transactionId).to.be.a('string').and.not.empty);",
+                  "pm.test('debits the linked amount: 500,000 - 75,000 = 425,000', () => {",
+                  "    pm.expect(Number(body.transaction.amount.amount)).to.eql(75000);",
+                  "    pm.expect(Number(body.transaction.balanceAfter.amount)).to.eql(425000);",
+                  "});",
+                  "pm.test('this was a fresh execution, not a replay', () => pm.expect(body.replayed).to.be.false);",
+                  "pm.collectionVariables.set('transactionId', body.transaction.transactionId);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Subscribe — same key replays instead of charging twice",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{subscribeKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 75000.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "1"]
+            },
+            "description": "The identical request repeated — a retry after a timeout, say. It must return the original result rather than debit the balance a second time."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('flagged as a replay', () => pm.expect(body.replayed).to.be.true);",
+                  "pm.test('returns the original transaction, not a new one', () => pm.expect(body.transaction.transactionId).to.eql(pm.collectionVariables.get('transactionId')));",
+                  "pm.test('the balance was not debited again', () => pm.expect(Number(body.transaction.balanceAfter.amount)).to.eql(425000));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Subscribe — same key with a different body is rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{subscribeKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 90000.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "1"]
+            },
+            "description": "Reusing a key for a different request is a caller bug. Silently replaying the first response would hide it, so the API refuses."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Content', () => pm.response.to.have.status(422));",
+                  "pm.test('reports the key as reused', () => pm.expect(pm.response.json().errorCode).to.eql('IDEMPOTENCY_KEY_REUSED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Subscribe — below the fund minimum",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{idemKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 100000.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/4",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "4"]
+            },
+            "description": "Business rule: each fund has a minimum subscription amount. FDO-ACCIONES requires COP 250,000; this offers 100,000."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Content', () => pm.response.to.have.status(422));",
+                  "const body = pm.response.json();",
+                  "pm.test('reports the minimum was not met', () => pm.expect(body.errorCode).to.eql('MINIMUM_AMOUNT_NOT_MET'));",
+                  "pm.test('names the fund', () => pm.expect(body.messages[0]).to.include('FDO-ACCIONES'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Subscribe — insufficient balance",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{refusedKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 900000.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/4",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "4"]
+            },
+            "description": "Business rule: with no balance available, the response must read exactly 'No tiene saldo disponible para vincularse al fondo <Nombre del fondo>'. The client holds 425,000 and this asks for 900,000.\n\n422 rather than 400: the request is perfectly valid, the account simply cannot cover it.\n\nThe key is named so the next request can retry with it."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('refusedKey', 'pm-refused-' + Date.now() + '-' + Math.floor(Math.random() * 1000000));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 Unprocessable Content', () => pm.response.to.have.status(422));",
+                  "const body = pm.response.json();",
+                  "pm.test('reports insufficient balance', () => pm.expect(body.errorCode).to.eql('INSUFFICIENT_BALANCE'));",
+                  "pm.test('uses the exact wording the specification requires', () => {",
+                  "    pm.expect(body.messages[0]).to.eql('No tiene saldo disponible para vincularse al fondo FDO-ACCIONES');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Subscribe — retry the refused key after correcting the amount",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{refusedKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 250000.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/4",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "4"]
+            },
+            "description": "A refused request commits nothing, so its idempotency key is released. The caller can correct the amount and retry at once instead of waiting out the reservation lease.\n\n425,000 - 250,000 = 175,000."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "const body = pm.response.json();",
+                  "pm.test('the retry executed rather than being blocked', () => pm.expect(body.replayed).to.be.false);",
+                  "pm.test('balance is now 175,000', () => pm.expect(Number(body.transaction.balanceAfter.amount)).to.eql(175000));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Subscribe — already linked to that fund",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{idemKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 75000.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "1"]
+            },
+            "description": "A fresh key, so idempotency does not apply — this is the domain refusing a second active subscription to the same fund. It is also the last line of defence against a duplicate that slipped past the idempotency check."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('reports the existing subscription', () => pm.expect(pm.response.json().errorCode).to.eql('ALREADY_SUBSCRIBED'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Cancel a subscription",
+      "description": "Challenge feature 2. Business rule: the linked amount is returned to the client in full.",
+      "item": [
+        {
+          "name": "Cancel — returns the linked amount",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Idempotency-Key", "value": "{{idemKey}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "1"]
+            },
+            "description": "Cancels the 75,000 linked to fund 1. No yield and no penalty: the full linked amount comes back. 175,000 + 75,000 = 250,000."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('records a CANCELLATION entry', () => pm.expect(body.transaction.type).to.eql('CANCELLATION'));",
+                  "pm.test('returns the full linked amount', () => pm.expect(Number(body.transaction.amount.amount)).to.eql(75000));",
+                  "pm.test('credits it back: 175,000 + 75,000 = 250,000', () => pm.expect(Number(body.transaction.balanceAfter.amount)).to.eql(250000));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cancel — a subscription that is no longer held",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Idempotency-Key", "value": "{{idemKey}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "1"]
+            },
+            "description": "A fresh key against a fund the client already left."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404 Not Found', () => pm.response.to.have.status(404));",
+                  "pm.test('reports no such subscription', () => pm.expect(pm.response.json().errorCode).to.eql('SUBSCRIPTION_NOT_FOUND'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Transaction history",
+      "description": "Challenge feature 3: openings and cancellations, newest first.",
+      "item": [
+        {
+          "name": "History — full",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{clientToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/transactions",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "transactions"]
+            },
+            "description": "Three entries by now: the opening on fund 1, the opening on fund 4, and the cancellation of fund 1."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('holds the three recorded movements', () => pm.expect(body.items).to.have.lengthOf(3));",
+                  "pm.test('newest first', () => {",
+                  "    const times = body.items.map(t => new Date(t.occurredAt).getTime());",
+                  "    for (let i = 1; i < times.length; i++) {",
+                  "        pm.expect(times[i - 1]).to.be.at.least(times[i]);",
+                  "    }",
+                  "});",
+                  "pm.test('only openings and cancellations appear', () => {",
+                  "    body.items.forEach(t => pm.expect(['OPENING', 'CANCELLATION']).to.include(t.type));",
+                  "});",
+                  "pm.test('identifiers are unique', () => {",
+                  "    const ids = body.items.map(t => t.transactionId);",
+                  "    pm.expect(new Set(ids).size).to.eql(ids.length);",
+                  "});",
+                  "pm.test('no cursor once the history is exhausted', () => pm.expect(body.nextCursor).to.be.null);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "History — first page of one",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{clientToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/transactions?limit=1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "transactions"],
+              "query": [{ "key": "limit", "value": "1" }]
+            },
+            "description": "Paging is cursor-based, not offset-based: the ledger grows at the head, so an offset would shift under a reader as new transactions arrive."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('honours the page size', () => pm.expect(body.items).to.have.lengthOf(1));",
+                  "pm.test('offers a cursor for the next page', () => pm.expect(body.nextCursor).to.be.a('string').and.not.empty);",
+                  "pm.collectionVariables.set('nextCursor', body.nextCursor);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "History — next page by cursor",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{clientToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/transactions?limit=1&cursor={{nextCursor}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "transactions"],
+              "query": [
+                { "key": "limit", "value": "1" },
+                { "key": "cursor", "value": "{{nextCursor}}" }
+              ]
+            },
+            "description": "The cursor is an opaque token so callers cannot construct their own and depend on the ledger's internal paging key."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('returns the following entry', () => pm.expect(body.items).to.have.lengthOf(1));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "History — a cursor this service did not issue",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{clientToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/transactions?cursor=not-a-real-cursor",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "transactions"],
+              "query": [{ "key": "cursor", "value": "not-a-real-cursor" }]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('reports an invalid cursor', () => pm.expect(pm.response.json().errorCode).to.eql('INVALID_CURSOR'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Balance",
+      "item": [
+        {
+          "name": "Read balance and active subscriptions",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{clientToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}"]
+            },
+            "description": "After the preceding folders: 500,000 - 75,000 - 250,000 + 75,000 = 250,000, with one active subscription left on fund 4."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('balance is 250,000', () => pm.expect(Number(body.balance.amount)).to.eql(250000));",
+                  "pm.test('one active subscription remains', () => pm.expect(body.activeSubscriptions).to.have.lengthOf(1));",
+                  "pm.test('it is the one on FDO-ACCIONES', () => {",
+                  "    pm.expect(body.activeSubscriptions[0].fundId).to.eql('4');",
+                  "    pm.expect(Number(body.activeSubscriptions[0].linkedAmount.amount)).to.eql(250000);",
+                  "});",
+                  "pm.test('the stored version is never exposed', () => pm.expect(body).to.not.have.property('version'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Security",
+      "description": "The API is a stateless JWT resource server. Ownership is checked per endpoint by comparing the token subject against the clientId in the path.",
+      "item": [
+        {
+          "name": "No token is rejected",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('401 Unauthorized', () => pm.response.to.have.status(401));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reading another client's balance is refused",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{clientToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/someone-elses-account",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "someone-elses-account"]
+            },
+            "description": "Without this check any authenticated client could read or spend another client's balance by editing the URL."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('403 Forbidden', () => pm.response.to.have.status(403));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Spending from another client's account is refused",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{idemKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 75000.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/someone-elses-account/subscriptions/1",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "someone-elses-account", "subscriptions", "1"]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('403 Forbidden', () => pm.response.to.have.status(403));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "A client token cannot register clients",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Mallory\",\n  \"email\": \"mallory@example.com\",\n  \"phone\": \"+573009998877\",\n  \"notificationPreference\": \"EMAIL\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients"]
+            },
+            "description": "Registration is admin-only."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('403 Forbidden', () => pm.response.to.have.status(403));"]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "7. Request validation",
+      "item": [
+        {
+          "name": "Subscribing without an idempotency key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 75000.00\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/3",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "3"]
+            },
+            "description": "The header is mandatory on operations that move money: without it a retry cannot be told apart from a second request."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Subscribing with a non-positive amount",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{clientToken}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{idemKey}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"amount\": 0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients/{{clientId}}/subscriptions/3",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients", "{{clientId}}", "subscriptions", "3"]
+            },
+            "description": "Rejected by request validation before it ever reaches the domain."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400 Bad Request', () => pm.response.to.have.status(400));",
+                  "pm.test('reports a validation failure', () => pm.expect(pm.response.json().errorCode).to.eql('VALIDATION_FAILED'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Registering with a preference that has no contact detail",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Grace Hopper\",\n  \"phone\": \"+573004445566\",\n  \"notificationPreference\": \"EMAIL\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/clients",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "clients"]
+            },
+            "description": "An EMAIL preference with no email address would leave the client unnotifiable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": ["pm.test('400 Bad Request', () => pm.response.to.have.status(400));"]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
