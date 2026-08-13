@@ -64,7 +64,9 @@ class IdempotentOperationExecutorTest {
         final FundsProperties properties = new FundsProperties(
                 new FundsProperties.Client(new BigDecimal("500000")),
                 "COP",
-                new FundsProperties.Idempotency(RETENTION, LEASE));
+                new FundsProperties.Idempotency(RETENTION, LEASE),
+                new FundsProperties.Security(new FundsProperties.Security.Jwt(
+                        "test-secret-key-at-least-32-characters!!", "yam-funds", Duration.ofHours(1))));
         executor = new IdempotentOperationExecutor(
                 idempotencyPort,
                 transactionRepository,

@@ -11,9 +11,11 @@ import java.time.Duration;
  * @param client      client-related business settings
  * @param currency    ISO code every monetary amount is denominated in
  * @param idempotency lifetimes governing idempotency records
+ * @param security    authentication settings
  */
 @ConfigurationProperties(prefix = "app")
-public record FundsProperties(Client client, String currency, Idempotency idempotency) {
+public record FundsProperties(
+        Client client, String currency, Idempotency idempotency, Security security) {
 
     /**
      * @param initialBalance opening balance every client is registered with
@@ -27,5 +29,19 @@ public record FundsProperties(Client client, String currency, Idempotency idempo
      *                  abandoned by a crashed instance
      */
     public record Idempotency(Duration retention, Duration lease) {
+    }
+
+    /**
+     * @param jwt bearer token settings
+     */
+    public record Security(Jwt jwt) {
+
+        /**
+         * @param secret HMAC signing key; must be overridden outside local development
+         * @param issuer value placed in, and required from, the {@code iss} claim
+         * @param ttl    how long a minted token stays valid
+         */
+        public record Jwt(String secret, String issuer, Duration ttl) {
+        }
     }
 }
