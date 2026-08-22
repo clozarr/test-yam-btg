@@ -15,7 +15,10 @@ services:
   # atomically) are rejected on a standalone server. A single-node replica set is
   # enough locally. The healthcheck initiates it on first start and is idempotent.
   mongodb:
-    image: mongo:8.0
+    # 8.2, not 8.0: MongoDB refuses to start on Linux kernels 6.19 and newer
+    # (SERVER-121912), and recent Docker Desktop ships a 7.x kernel in its VM.
+    # The 8.0 line still fails there; 8.2 carries the fix.
+    image: mongo:8.2
     container_name: yam-mongodb
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     ports:
